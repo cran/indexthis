@@ -1,0 +1,12 @@
+47ad17d2730eb6700bbae785a8f6dc82 *DESCRIPTION
+3906b7d3a20c0af81900315bff44254a *NAMESPACE
+9ad3149e8ab127ee19b936f60997738b *NEWS.md
+b46cd3f62ee93ff1bf757f7dbf37196c *R/RcppExports.R
+2c41ad444415d2a9e34a4fb1e1567da6 *R/check.R
+7562173e25fca59d4ea3379db34d3b5b *R/test_funs.R
+f134916c2490e1373f392a021079a755 *R/to_index.R
+4d2cd7a1ef2dc1da19490099fcbae7d8 *README.md
+96b5e5dc6bfb861cb0e6304791925582 *man/to_index.Rd
+1d15bd91e02e6a88f5c5037e1330365a *src/RcppExports.cpp
+7deff3b382d8fb968019eed219116684 *src/to_index.cpp
+58047c287d8adb24d62223be4f18e7c1 *tests/index_tests.R

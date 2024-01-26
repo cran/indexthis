@@ -1,0 +1,14 @@
+useDynLib(indexthis, .registration = TRUE)
+
+#
+# EXPORT
+#
+
+export(to_index)
+
+#
+# IMPORT
+#
+
+importFrom(Rcpp, evalCpp)
+
