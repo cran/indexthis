@@ -1,7 +1,7 @@
 /*********************************************************************************
 * Author: Laurent R. Berge                                                       *
-* Version: 1.0.0                                                                 *
-* Date: 2024-01-23                                                               *
+* Version: 1.0.1                                                                 *
+* Date: 2024-02-01                                                               *
 *                                                                                *
 * Algorithm turning a vector, or a group of vectors of the same length, into     *
 * an integer vector ranging from 1 to the number of unique elements in the       *
@@ -14,20 +14,20 @@
 *                                                                                *
 *********************************************************************************/
 
+// Comments:
+// - I don't handle COMPLEX efficiently (easy to fix that). Is it important to handle it?
+// - NAs and NaNs in numeric vectors are not distinguished. 
+// In my use cases, that is not important. I don't know if it should be handled.
+// 
+// - there are many repetitions to handle many different cases. The problem is that
+// the compiler does not optimize the loops if I write more compactly. So be it.
+
+
 #include <stdint.h>
 #include <cmath>
 #include <vector>
 #include <Rcpp.h>
 using namespace Rcpp;
-
-// Comments:
-// - I don't handle COMPLEX efficiently (easy to fix that). Is it important to handle it?
-// - NAs and NaNs in numeric vectors are not distinguished (I don't think it 
-// should in numerical applications). I don't see when that's important.
-// 
-// - there are many repetitions to handle many different cases. The problem is that
-// the compiler does not optimize the loops if I write more compactly. So be it.
-
 using std::vector;
 
 enum {T_INT, T_DBL_INT, T_DBL, T_STR};
@@ -69,6 +69,10 @@ public:
   int x_range_bin = 0;
   int x_min = 0;
   int type = 0;
+  
+  // if a non numeric non character vector has been turned into character
+  // we need to keep track of protection
+  bool is_protect = false;
   
   // this is only used in the quick ints algorithm
   // for factors and bool we assume there are NAs since we don't traverse the data
@@ -208,17 +212,16 @@ r_vector::r_vector(SEXP x){
       SEXP call_as_character = PROTECT(Rf_lang2(Rf_install("as.character"), x));
   
       int any_error;
-      this->x_conv = R_tryEval(call_as_character, R_GlobalEnv, &any_error);
+      this->x_conv = PROTECT(R_tryEval(call_as_character, R_GlobalEnv, &any_error));
 
       if(any_error){
         Rf_error("In `to_index`, the vector to index was not standard (int or real, etc) and failed to be converted to character before applying indexation._n");
       }
       
-      UNPROTECT(1);
-      
       // conversion succeeded
       this->type = T_STR;
       this->px_intptr = (intptr_t *) STRING_PTR(this->x_conv);
+      this->is_protect = true;
       
     } else {
       Rf_error("In `to_index`, the R vectors must be atomic. The current type is not valid.");
@@ -336,10 +339,20 @@ void general_type_to_index_single(r_vector *x, int *__restrict p_index, int &n_g
     // NOTA: the compiler will take the if() out of the loop
     // not possible if we also have an if() inside the while() loop
     // => explains why I needed to repeat all the for loops
+    const bool any_na = x->any_na;
+    const int NA_value = x->NA_value;
     for(size_t i=0 ; i<n ; ++i){
       
       if(x_type == T_DBL_INT){
-        id = hash_single((int) px_dbl[i], shifter);
+        if(any_na){
+          if(std::isnan(px_dbl[i])){
+            id = hash_single(NA_value, shifter);
+          } else {
+            id = hash_single((int) px_dbl[i], shifter);
+          }
+        } else {
+          id = hash_single((int) px_dbl[i], shifter);
+        }
       } else {
         u_d2int.dbl = px_dbl[i];
         id = hash_single(u_d2int.uint[0] + u_d2int.uint[1], shifter);
@@ -531,10 +544,20 @@ void general_type_to_index_double(r_vector *x, int *__restrict p_index_in,
       // NOTA: the compiler will take the if() out of the loop
       // not possible if we also have an if() inside the while() loop
       // => explains why I needed to repeat all the for loops
+      const bool any_na = x->any_na;
+      const int NA_value = x->NA_value;
       for(size_t i=0 ; i<n ; ++i){
         
         if(x_type == T_DBL_INT){
-          id = hash_double((int) px_dbl[i], p_index_in[i], shifter);
+          if(any_na){
+            if(std::isnan(px_dbl[i])){
+              id = hash_double(NA_value, p_index_in[i], shifter);
+            } else {
+              id = hash_double((int) px_dbl[i], p_index_in[i], shifter);
+            }
+          } else {
+            id = hash_double((int) px_dbl[i], p_index_in[i], shifter);
+          }
         } else {
           u_d2int.dbl = px_dbl[i];
           id = hash_double(u_d2int.uint[0] + u_d2int.uint[1], p_index_in[i], shifter);
@@ -812,6 +835,7 @@ SEXP cpp_to_index(SEXP x){
     for(int k=0; k<K; ++k){
       r_vector rvec(VECTOR_ELT(x, k));
       all_vecs.push_back(rvec);
+      
       if(k == 0){
         n = Rf_length(VECTOR_ELT(x, 0));
       } else if((size_t) Rf_length(VECTOR_ELT(x, k)) != n){
@@ -934,6 +958,14 @@ SEXP cpp_to_index(SEXP x){
   Rf_setAttrib(res, R_NamesSymbol, std_string_to_r_string({"index", "first_obs"}));
     
   UNPROTECT(3);
+  
+  // we unprotect if we have converted some vectors to character
+  for(int k=0; k<K; ++k){
+    if(all_vecs[k].is_protect){
+      UNPROTECT(2);
+    }
+  }
+  
   
   return res;  
 }
