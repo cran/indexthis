@@ -29,7 +29,6 @@
 #' @param items.simplify Logical scalar, default is `TRUE`. Only used if the values
 #' from the input vectors are returned with `items=TRUE`. If there is only one input vector,
 #' the `items` is a vector if `items.simplify=TRUE`, and a data.frame otherwise.
-#' @param internal Logical, default is `FALSE`. If `TRUE`, some checks on the data are ignored.
 #' 
 #' @details 
 #' The algorithm to create the indexes is based on a semi-hashing of the vectors in input. 
@@ -67,7 +66,7 @@
 #' @examples
 #' 
 #' x = c("u", "a", "a", "s", "u", "u")
-#' y = c(  5,   5,   5,   3,   3,   7)
+#' y = c(  5,   5,   5,   3,   3,   5)
 #' 
 #' # By default, the index value is based on order of occurrence
 #' to_index(x)
@@ -95,14 +94,17 @@
 #' to_index(x_NA, items = TRUE, sorted = TRUE)
 #' 
 #' 
+#' #
+#' # Getting the data back from the index
+#' #
+#' 
+#' info = to_index(x, y, items = TRUE)
+#' info$items[info$index, ]
+#' 
+#' 
+#' 
 to_index = function(..., list = NULL, sorted = FALSE, items = FALSE,
-                    items.simplify = TRUE, internal = FALSE){
-
-  if(!internal){
-    check_logical(sorted, scalar = TRUE)
-    check_logical(items, scalar = TRUE)
-    check_logical(items.simplify, scalar = TRUE)
-  }  
+                    items.simplify = TRUE){
   
   return_items = items
   
@@ -119,11 +121,7 @@ to_index = function(..., list = NULL, sorted = FALSE, items = FALSE,
     dots = list
     IS_DOT = FALSE
   } else {
-    if(!internal){
-      dots = check_set_dots(..., mbt = TRUE)
-    } else {
-      dots = list(...)
-    }
+    dots = list(...)
   }  
 
   Q = length(dots)
@@ -132,7 +130,7 @@ to_index = function(..., list = NULL, sorted = FALSE, items = FALSE,
 
   if(length(unique(n_all)) != 1){
     stop("All elements in `...` should be of the same length (current lenghts are ", 
-         enum(n_all), ").")
+         paste0(n_all, collapse = ", "), ").")
   }
   
   if(n == 0){
@@ -153,7 +151,7 @@ to_index = function(..., list = NULL, sorted = FALSE, items = FALSE,
   # Creating the ID
   #
   
-  info = cpp_to_index(dots)
+  info = .Call(`_indexthis_cpp_to_index`, dots)
   index = info$index
   if(sorted || return_items){
     

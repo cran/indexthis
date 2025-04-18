@@ -26,16 +26,22 @@
 #include <stdint.h>
 #include <cmath>
 #include <vector>
-#include <Rcpp.h>
-using namespace Rcpp;
+#include <string>
+#include <algorithm>
+#include <R.h>
+#include <Rinternals.h>
+
 using std::vector;
+
+namespace indexthis {
 
 enum {T_INT, T_DBL_INT, T_DBL, T_STR};
 
-union double2int {
-  double dbl;
-  uint32_t uint[2];
-};
+inline int double_to_uint32(const double &x){
+  uint32_t y[2];
+  std::memcpy(y, &x, sizeof(y));
+  return y[0] + y[1];
+}
 
 inline int power_of_two(double x){
   return std::ceil(std::log2(x + 1));
@@ -97,7 +103,7 @@ r_vector::r_vector(SEXP x){
   if(TYPEOF(x) == STRSXP){
     // character
     this->type = T_STR;
-    this->px_intptr = (intptr_t *) STRING_PTR(x);
+    this->px_intptr = (intptr_t *) STRING_PTR_RO(x);
     
   } else if(Rf_isNumeric(x) || Rf_isFactor(x) || TYPEOF(x) == LGLSXP){
       
@@ -220,7 +226,7 @@ r_vector::r_vector(SEXP x){
       
       // conversion succeeded
       this->type = T_STR;
-      this->px_intptr = (intptr_t *) STRING_PTR(this->x_conv);
+      this->px_intptr = (intptr_t *) STRING_PTR_RO(this->x_conv);
       this->is_protect = true;
       
     } else {
@@ -275,7 +281,6 @@ void general_type_to_index_single(r_vector *x, int *__restrict p_index, int &n_g
   
   const int x_type = x->type;
   
-  union double2int u_d2int;
   int g = 0;
   uint32_t id = 0;
   int obs = 0;
@@ -354,8 +359,7 @@ void general_type_to_index_single(r_vector *x, int *__restrict p_index, int &n_g
           id = hash_single((int) px_dbl[i], shifter);
         }
       } else {
-        u_d2int.dbl = px_dbl[i];
-        id = hash_single(u_d2int.uint[0] + u_d2int.uint[1], shifter);
+        id = hash_single(double_to_uint32(px_dbl[i]), shifter);
       }      
       
       bool does_exist = false;
@@ -481,7 +485,6 @@ void general_type_to_index_double(r_vector *x, int *__restrict p_index_in,
     int *hashed_obs_vec = new int[larger_n + 1];
     std::fill_n(hashed_obs_vec, larger_n + 1, 0);
     
-    union double2int u_d2int;
     uint32_t id = 0;
     int obs = 0;
     if(x_type == T_STR){
@@ -559,8 +562,7 @@ void general_type_to_index_double(r_vector *x, int *__restrict p_index_in,
             id = hash_double((int) px_dbl[i], p_index_in[i], shifter);
           }
         } else {
-          u_d2int.dbl = px_dbl[i];
-          id = hash_double(u_d2int.uint[0] + u_d2int.uint[1], p_index_in[i], shifter);
+          id = hash_double(double_to_uint32(px_dbl[i]), p_index_in[i], shifter);
         }
         
         bool does_exist = false;
@@ -818,8 +820,8 @@ void multiple_ints_to_index(vector<r_vector> &all_vecs, vector<int> &all_k,
   delete[] int_array;
 }
 
-// [[Rcpp::export]]
-SEXP cpp_to_index(SEXP x){
+
+SEXP cpp_to_index_main(SEXP &x){
   // x: vector or list of vectors of the same length (n)
   // returns:
   // - index: vector of length n, from 1 to the numberof unique values of x (g)
@@ -970,192 +972,21 @@ SEXP cpp_to_index(SEXP x){
   return res;  
 }
 
+}
 
-class double_char_vec {
-  intptr_t * p_x1 = nullptr;
-  intptr_t * p_x2 = nullptr;
-  
-  int n1 = 0;
-  int n2 = 0;
-  
-  public:
-  
-  double_char_vec() = delete;
-  double_char_vec(SEXP, SEXP);
-  
-  int operator[](int i){
-    return i < n1 ? p_x1[i] : p_x2[i - n1];
-  }
-  
-  int size(){
-    return n1 + n2;
-  }
+// export to R
+
+extern "C" SEXP _indexthis_cpp_to_index(SEXP x){
+  return indexthis::cpp_to_index_main(x);
+}
+
+static const R_CallMethodDef CallEntries[] = {
+    {"_indexthis_cpp_to_index", (DL_FUNC) &_indexthis_cpp_to_index, 1},
+    {NULL, NULL, 0}
 };
 
-double_char_vec::double_char_vec(SEXP x1, SEXP x2){
-  n1 = Rf_length(x1);
-  n2 = Rf_length(x2);
-  
-  p_x1 = (intptr_t *) STRING_PTR(x1);
-  p_x2 = (intptr_t *) STRING_PTR(x2);
+extern "C" void R_init_indexthis(DllInfo *dll) {
+    R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
+    R_useDynamicSymbols(dll, FALSE);
 }
-
-
-// [[Rcpp::export]]
-SEXP cpp_double_factor_to_index(SEXP x1, SEXP x2){
-  // x1, x2: factors
-  // returns an index vector of size len(x1) + len(x2)
-  
-  if(!Rf_isFactor(x1)){
-    Rf_error("The argument x1 must be a factor.");
-  }
-  
-  if(!Rf_isFactor(x2)){
-    Rf_error("The argument x2 must be a factor.");
-  }
-  
-  SEXP lab1 = Rf_getAttrib(x1, R_LevelsSymbol); 
-  SEXP lab2 = Rf_getAttrib(x2, R_LevelsSymbol); 
-  
-  //
-  // STEP 1: we turn the set of all labels into an index
-  //
-  
-  double_char_vec all_labels(lab1, lab2);
-  
-  int n_labels = all_labels.size();
-  
-  // this algorithm is taken from general_type_to_index_single
-  int shifter = power_of_two(2.0 * n_labels + 1.0);
-  if(shifter < 8) shifter = 8;
-  size_t larger_n = std::pow(2, shifter);
-  
-  int *hashed_obs_vec = new int[larger_n + 1];
-  std::fill_n(hashed_obs_vec, larger_n + 1, 0);
-  
-  int *p_lab_index = new int[n_labels];
-  
-  int g = 0;
-  uint32_t id = 0;
-  int obs = 0;
-  for(int i=0 ; i<n_labels ; ++i){
-    id = hash_single(all_labels[i] & 0xffffffff, shifter);
-    
-    bool does_exist = false;
-    while(hashed_obs_vec[id] != 0){
-      obs = hashed_obs_vec[id] - 1;
-      if(all_labels[obs] == all_labels[i]){
-        p_lab_index[i] = p_lab_index[obs];
-        does_exist = true;
-        break;
-      } else {
-        ++id;
-        if(id > larger_n){
-          id %= larger_n;
-        }
-      }
-    }
-
-    if(!does_exist){
-      // hash never seen => ok
-      hashed_obs_vec[id] = i + 1;
-      p_lab_index[i] = ++g;
-    }
-  }
-  
-  
-  //
-  // STEP 2: we turn the two input factors into a single index 
-  //
-  
-  
-  int n1 = Rf_length(x1);
-  int n2 = Rf_length(x2);
-  
-  int *p_x1 = INTEGER(x1);
-  int *p_x2 = INTEGER(x2);
-  
-  SEXP index = PROTECT(Rf_allocVector(INTSXP, n1 + n2));
-  int *p_index = INTEGER(index);
-  
-  int g_NA = ++g;
-  int g_MAX = g;
-  
-  int *p_g_exists = new int[g_MAX];
-  std::fill_n(p_g_exists, g_MAX, 0);
-  
-  int xi = 0;
-  for(int i=0 ; i<n1 ; ++i){
-    xi = p_x1[i];
-    if(xi == NA_INTEGER){
-      p_g_exists[g_NA - 1] = 1;
-      p_index[i] = g_NA;
-    } else {
-      g = p_lab_index[xi - 1];
-      p_g_exists[g - 1] = 1;
-      p_index[i] = g;
-    }    
-  }
-  
-  int *p_lab_index_2 = p_lab_index + Rf_length(lab1);
-  for(int i=0 ; i<n2 ; ++i){
-    xi = p_x2[i];
-    if(xi == NA_INTEGER){
-      p_g_exists[g_NA - 1] = 1;
-      p_index[n1 + i] = g_NA;
-    } else {
-      g = p_lab_index_2[xi - 1];
-      p_g_exists[g - 1] = 1;
-      p_index[n1 + i] = g;
-    }
-  }
-  
-  delete[] p_lab_index;
-  
-  //
-  // STEP 3: re-index the index if there are more labels than values
-  //
-  
-  bool reindex = false;
-  for(int i=0 ; i<g_MAX ; ++i){
-    if(p_g_exists[i] == 0){
-      if(i < g_NA - 1){
-        // if only NAs are not there, we don't reindex
-        // otherwise we do
-        reindex = true;
-      }
-      break;
-    }
-  }
-  
-  delete[] p_g_exists;
-  
-  if(reindex){
-    
-    int *int_array = new int[g_MAX];
-    std::fill_n(int_array, g_MAX, 0);
-    
-    int g = 0;
-    for(int i=0 ; i<n1+n2 ; ++i){
-      id = p_index[i] - 1;      
-      
-      if(int_array[id] == 0){
-        // new item: we save the group id
-        ++g;
-        int_array[id] = g;
-        p_index[i] = g;
-      } else {
-        p_index[i] = int_array[id];
-      }
-    }
-    
-    delete[] int_array;
-  }
-  
-  UNPROTECT(1);
-  return index;
-}
-
-
-
 
