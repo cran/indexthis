@@ -1,4 +1,9 @@
 
+# indexthis 2.2.0
+
+- remove Rf_error from c functions
+- improve PROTECT/UNPROTECT handling => now bookkeeping is (should be) right whetever the branch
+
 # indexthis 2.1.0
 
 ## comply to new CRAN rules

@@ -1,6 +1,6 @@
 // 
 // Generated automatically with indexthis::indexthis_vendor
-// this is indexthis version 2.1.0
+// this is indexthis version 2.2.0
 // 
 
 
@@ -9,6 +9,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <memory>
 #include <R.h>
 #include <Rinternals.h>
 using std::vector;
@@ -42,12 +43,19 @@ public:
   int x_range_bin = 0;
   int x_min = 0;
   int type = 0;
+  bool is_error = false;
+  std::string error_msg;
   bool is_protect = false;
   bool any_na = true;
   int NA_value = -1;
   int *px_int = (int *) nullptr;
   double *px_dbl = (double *) nullptr;
   intptr_t *px_intptr = (intptr_t *) nullptr;
+  ~r_vector(){
+    if(is_protect){
+      UNPROTECT(1);
+    }
+  }
 };
 r_vector::r_vector(SEXP x){
   int n = Rf_length(x);
@@ -136,18 +144,21 @@ r_vector::r_vector(SEXP x){
   } else {
     if(TYPEOF(x) == CHARSXP || TYPEOF(x) == LGLSXP || TYPEOF(x) == INTSXP || 
       TYPEOF(x) == REALSXP || TYPEOF(x) == CPLXSXP || TYPEOF(x) == STRSXP || TYPEOF(x) == RAWSXP){
-      SEXP call_as_character = PROTECT(Rf_lang2(Rf_install("as.character"), x));
       int any_error;
-      this->x_conv = PROTECT(R_tryEval(call_as_character, R_GlobalEnv, &any_error));
+      this->x_conv = PROTECT(R_tryEval(Rf_lang2(Rf_install("as.character"), x), R_GlobalEnv, &any_error));
+      this->is_protect = true;
       if(any_error){
-        Rf_error("In `to_index`, the vector to index was not standard (int or real, etc) and failed to be converted to character before applying indexation._n");
+        this->is_error = true;
+        this->error_msg = "In `to_index`, the vector to index was not standard (int or real, etc) and failed to be converted to character before applying indexation._n";
+        return;
       }
       this->type = T_STR;
       this->px_intptr = (intptr_t *) STRING_PTR_RO(this->x_conv);
-      this->is_protect = true;
     } else {
-      Rf_error("In `to_index`, the R vectors must be atomic. The current type is not valid.");
-    }    
+      this->is_error = true;
+      this->error_msg = "In `to_index`, the R vectors must be atomic. The current type is not valid.";
+      return;
+    }
   }
 }
 SEXP std_string_to_r_string(std::vector<std::string> x){
@@ -441,16 +452,16 @@ inline void update_index_intarray_g_obs(int id, size_t i, int &g, int * &int_arr
     p_index[i] = int_array[id];
   }  
 }
-void multiple_ints_to_index(vector<r_vector> &all_vecs, vector<int> &all_k, 
+void multiple_ints_to_index(const vector<std::shared_ptr<r_vector>> &all_vecs, vector<int> &all_k, 
                             int *__restrict p_index, int &n_groups,
                             vector<int> &vec_first_obs, bool is_final){
   int sum_bin_ranges = 0;
   int K = all_k.size();
   for(auto &&k : all_k){
-    sum_bin_ranges += all_vecs[k].x_range_bin;
+    sum_bin_ranges += all_vecs[k]->x_range_bin;
   }  
   int k0 = all_k[0];
-  r_vector *x0 = &all_vecs[k0];
+  r_vector *x0 = all_vecs[k0].get();
   const size_t n = x0->n;
   const int * px0_int = (int *) x0->px_int;
   const double * px0_dbl = (double *) x0->px_dbl;
@@ -500,7 +511,7 @@ void multiple_ints_to_index(vector<r_vector> &all_vecs, vector<int> &all_k,
     }
   } else {
     int k1 = all_k[1];
-    r_vector *x1 = &all_vecs[k1];
+    r_vector *x1 = all_vecs[k1].get();
     const int *px1_int = (int *) x1->px_int;
     const double *px1_dbl = (double *) x1->px_dbl;
     const bool x1_type = x1->type;
@@ -563,7 +574,7 @@ void multiple_ints_to_index(vector<r_vector> &all_vecs, vector<int> &all_k,
       offset += x1->x_range_bin;
       for(int ind=2 ; ind<K-1 ; ++ind){
         int k = all_k[ind];
-        r_vector *xk = &all_vecs[k];
+        r_vector *xk = all_vecs[k].get();
         const int *pxk_int = (int *) xk->px_int;
         const double *pxk_dbl = (double *) xk->px_dbl;
         const int x_type = xk->type;
@@ -579,7 +590,7 @@ void multiple_ints_to_index(vector<r_vector> &all_vecs, vector<int> &all_k,
         offset += xk->x_range_bin;
       }
       int k = all_k[K - 1];
-      r_vector *xk = &all_vecs[k];
+      r_vector *xk = all_vecs[k].get();
       const int *pxk_int = (int *) xk->px_int;
       const double *pxk_dbl = (double *) xk->px_dbl;
       const int x_type = xk->type;
@@ -612,23 +623,42 @@ void multiple_ints_to_index(vector<r_vector> &all_vecs, vector<int> &all_k,
 SEXP cpp_to_index_main(SEXP &x){
   size_t n = 0;
   int K = 0;
-  std::vector<r_vector> all_vecs;
+  std::vector<std::shared_ptr<r_vector>> all_pvecs;
+  bool is_error = false;
+  std::string error_msg;
   if(TYPEOF(x) == VECSXP){
     K = Rf_length(x);
     for(int k=0; k<K; ++k){
-      r_vector rvec(VECTOR_ELT(x, k));
-      all_vecs.push_back(rvec);
+      std::shared_ptr<r_vector> prvec = std::make_shared<r_vector>(VECTOR_ELT(x, k));
+      all_pvecs.push_back(prvec);
+      if(all_pvecs.back()->is_error){
+        is_error = true;
+        error_msg = all_pvecs.back()->error_msg;
+        break;
+      }
       if(k == 0){
         n = Rf_length(VECTOR_ELT(x, 0));
       } else if((size_t) Rf_length(VECTOR_ELT(x, k)) != n){
-        Rf_error("All the vectors to turn into an index must be of the same length. This is currently not the case.");
+        is_error = true;
+        error_msg = "All the vectors to turn into an index must be of the same length. This is currently not the case.";
+        break;
       }
     }
   } else {
     K = 1;
     n = Rf_length(x);
-    r_vector rvec(x);
-    all_vecs.push_back(rvec);
+    std::shared_ptr<r_vector> prvec = std::make_shared<r_vector>(x);
+    all_pvecs.push_back(prvec);
+  }
+  if(is_error){
+    SEXP sexp_is_error = PROTECT(Rf_allocVector(LGLSXP, 1));
+    SEXP sexp_error_msg = PROTECT(std_string_to_r_string({error_msg}));
+    SEXP res = PROTECT(Rf_allocVector(VECSXP, 2));
+    SET_VECTOR_ELT(res, 0, sexp_is_error);
+    SET_VECTOR_ELT(res, 1, sexp_error_msg);
+    Rf_setAttrib(res, R_NamesSymbol, std_string_to_r_string({"is_error", "error_msg"}));
+    UNPROTECT(3);
+    return res;
   }
   SEXP index = PROTECT(Rf_allocVector(INTSXP, n));
   int *p_index = INTEGER(index);
@@ -636,9 +666,9 @@ SEXP cpp_to_index_main(SEXP &x){
   int sum_bin_ranges = 0;
   vector<int> id_fast_int;
   for(int k=0 ; k<K ; ++k){
-    r_vector *x = &all_vecs[k];
-    if(x->is_fast_int){
-      int new_bin_range = sum_bin_ranges + x->x_range_bin;
+    const r_vector &x = *(all_pvecs[k]);
+    if(x.is_fast_int){
+      int new_bin_range = sum_bin_ranges + x.x_range_bin;
       if(new_bin_range < 17 || (K >= 2 && new_bin_range <= power_of_two(5 * n))){
         id_fast_int.push_back(k);
         sum_bin_ranges = new_bin_range;
@@ -653,7 +683,7 @@ SEXP cpp_to_index_main(SEXP &x){
   if(!id_fast_int.empty()){
     init_done = true;
     is_final = (size_t) K == id_fast_int.size();
-    multiple_ints_to_index(all_vecs, id_fast_int, p_index, n_groups, vec_first_obs, is_final);
+    multiple_ints_to_index(all_pvecs, id_fast_int, p_index, n_groups, vec_first_obs, is_final);
   }
   if(!is_final){
     vector<int> all_k_left;
@@ -666,7 +696,7 @@ SEXP cpp_to_index_main(SEXP &x){
       int k0 = all_k_left[0];
       all_k_left.erase(all_k_left.begin());
       is_final = all_k_left.empty();
-      general_type_to_index_single(&all_vecs[k0], p_index, n_groups, vec_first_obs, is_final);
+      general_type_to_index_single(all_pvecs[k0].get(), p_index, n_groups, vec_first_obs, is_final);
     }
     if(!is_final){
       int *p_extra_index = new int[n];
@@ -675,10 +705,10 @@ SEXP cpp_to_index_main(SEXP &x){
         int k = all_k_left[ind];
         is_final = ind == all_k_left.size() - 1;
         if(is_res_updated_index){
-          general_type_to_index_double(&all_vecs[k], p_index, p_extra_index, n_groups, vec_first_obs, is_final);
+          general_type_to_index_double(all_pvecs[k].get(), p_index, p_extra_index, n_groups, vec_first_obs, is_final);
           is_res_updated_index = false;
         } else {
-          general_type_to_index_double(&all_vecs[k], p_extra_index, p_index, n_groups, vec_first_obs, is_final);
+          general_type_to_index_double(all_pvecs[k].get(), p_extra_index, p_index, n_groups, vec_first_obs, is_final);
           is_res_updated_index = true;
         }
       }
@@ -697,11 +727,6 @@ SEXP cpp_to_index_main(SEXP &x){
   SET_VECTOR_ELT(res, 1, r_first_obs);
   Rf_setAttrib(res, R_NamesSymbol, std_string_to_r_string({"index", "first_obs"}));
   UNPROTECT(3);
-  for(int k=0; k<K; ++k){
-    if(all_vecs[k].is_protect){
-      UNPROTECT(2);
-    }
-  }
   return res;  
 }
 }
